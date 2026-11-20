@@ -7,7 +7,11 @@
     "dev": "wrangler dev",
     "types": "wrangler types --strict-vars=false",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "spike:fixtures": "node spikes/make-fixtures.mjs",
+    "spike:dev": "wrangler dev -c wrangler.cpu-spike.jsonc --port 8790",
+    "spike:deploy": "wrangler deploy -c wrangler.cpu-spike.jsonc",
+    "spike:ladder": "node spikes/run-ladder.mjs"
   },
   "dependencies": {
     "hono": "^4.13.19"

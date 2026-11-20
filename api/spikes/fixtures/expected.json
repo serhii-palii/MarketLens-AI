@@ -1,0 +1,22 @@
+{
+  "50kb": {
+    "added": 8,
+    "removed": 4,
+    "paragraphs": 75
+  },
+  "150kb": {
+    "added": 11,
+    "removed": 8,
+    "paragraphs": 204
+  },
+  "400kb": {
+    "added": 21,
+    "removed": 21,
+    "paragraphs": 568
+  },
+  "1000kb": {
+    "added": 43,
+    "removed": 43,
+    "paragraphs": 1394
+  }
+}
