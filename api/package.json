@@ -7,12 +7,15 @@
     "dev": "wrangler dev",
     "types": "wrangler types --strict-vars=false",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply DB_PRIVATE --local && wrangler d1 migrations apply DB_DEMO --local"
   },
   "dependencies": {
     "hono": "^4.13.19"
   },
   "devDependencies": {
+    "@types/sql.js": "^1.16.0",
+    "sql.js": "^1.17.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.1",
     "wrangler": "^4.165.0"

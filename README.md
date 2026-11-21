@@ -13,12 +13,13 @@ MarketLens AI monitors publicly available competitor and market information, det
 - Single-origin design: one Worker serves both the frontend and the API, and grants no cross-origin access.
 - Frontend shell (React) that calls the API and displays connection status.
 - Automated tests for the health endpoint, cross-origin behavior, and error responses.
+- Initial database schema (migration) with automated tests for constraints, cascades, and immutable review history.
 
 ## Limitations
 
 - No data collection, change detection, AI analysis, authentication, or review workflow yet.
 - The application is not deployed.
-- The database schema has not been created; migrations arrive with the data-layer phase.
+- The database schema exists as a migration, but the API does not read or write it yet.
 
 ## Planned scope
 
