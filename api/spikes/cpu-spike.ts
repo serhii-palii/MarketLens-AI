@@ -1,9 +1,12 @@
 // FILE: api/spikes/cpu-spike.ts
 // Throwaway Worker that runs staged extraction and diff pipelines so platform CPU use can be measured.
+import { handleAi } from "./ai-spike";
 
 interface SpikeEnv {
   ASSETS: Fetcher;
+  AI: Ai;
   SPIKE_URLS?: string;
+  SPIKE_TOKEN?: string;
 }
 
 interface CollectedPage {
@@ -425,6 +428,34 @@ export default {
     if (url.pathname === "/spike/fixture")
       return handleFixture(env, url.searchParams);
     if (url.pathname === "/spike/url") return handleUrl(env, url.searchParams);
+    if (url.pathname === "/spike/ai") return handleAi(env, request);
     return Response.json({ error: "not_found" }, { status: 404 });
+  },
+
+  // Runs the full regex pipeline once per cron tick so scheduled CPU use shows up in the logs.
+  async scheduled(
+    _controller: ScheduledController,
+    env: SpikeEnv,
+  ): Promise<void> {
+    const [page, oldText] = await Promise.all([
+      loadAsset(env, "250kb-edited.html"),
+      loadAsset(env, "250kb.txt"),
+    ]);
+    if (!page || !oldText) {
+      console.log(JSON.stringify({ event: "cron-run", ok: false }));
+      return;
+    }
+    const result = await runVariant(
+      "r6-full",
+      page,
+      (await oldText.text()).split("\n"),
+    );
+    console.log(
+      JSON.stringify({
+        event: "cron-run",
+        ok: true,
+        paragraphs: result?.["paragraphs"] ?? null,
+      }),
+    );
   },
 } satisfies ExportedHandler<SpikeEnv>;

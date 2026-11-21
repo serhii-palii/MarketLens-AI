@@ -11,7 +11,8 @@
     "spike:fixtures": "node spikes/make-fixtures.mjs",
     "spike:dev": "wrangler dev -c wrangler.cpu-spike.jsonc --port 8790",
     "spike:deploy": "wrangler deploy -c wrangler.cpu-spike.jsonc",
-    "spike:ladder": "node spikes/run-ladder.mjs"
+    "spike:ladder": "node spikes/run-ladder.mjs",
+    "spike:eval": "node spikes/run-ai-eval.mjs"
   },
   "dependencies": {
     "hono": "^4.13.19"

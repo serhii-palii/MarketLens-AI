@@ -1,11 +1,13 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "marketlens-cpu-spike",
   "main": "spikes/cpu-spike.ts",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./spikes/fixtures",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
   },
-  "observability": { "enabled": true }
+  "ai": { "binding": "AI" },
+  "triggers": { "crons": ["* * * * *"] },
+  "observability": { "enabled": true },
 }
