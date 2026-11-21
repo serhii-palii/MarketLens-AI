@@ -1,18 +1,16 @@
 // FILE: api/spikes/cpu-spike.ts
-// Throwaway Worker that runs page extraction and diffing so platform CPU use can be measured.
+// Throwaway Worker that runs staged extraction and diff pipelines so platform CPU use can be measured.
 
 interface SpikeEnv {
   ASSETS: Fetcher;
   SPIKE_URLS?: string;
 }
 
-interface ExtractedPage {
+interface CollectedPage {
   title: string;
-  metaDescription: string;
-  canonicalUrl: string;
   headings: string[];
   linkCount: number;
-  paragraphs: string[];
+  chunks: string[];
 }
 
 interface DiffSummary {
@@ -21,10 +19,20 @@ interface DiffSummary {
   wordEdits: number;
 }
 
-const BLOCK_ELEMENTS = "p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, figcaption, dt, dd";
+type Result = Record<string, unknown>;
+
+const BLOCK_ELEMENTS =
+  "p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, figcaption, dt, dd";
 const SKIPPED_ELEMENTS = "script, style, noscript, svg, template, nav, footer";
 const MAX_WORD_DIFFS = 20;
+const TRUNCATE_BYTES = 150_000;
 const FIXTURE_NAME = /^\d{2,4}kb$/;
+const DIFF_VARIANTS = new Set([
+  "h5-diff",
+  "r4-diff",
+  "r5-trunc-diff",
+  "r6-full",
+]);
 
 const ENTITIES: Record<string, string> = {
   "&amp;": "&",
@@ -36,7 +44,14 @@ const ENTITIES: Record<string, string> = {
 };
 
 function decodeEntities(value: string): string {
-  return value.replace(/&(amp|lt|gt|quot|nbsp|#39);/g, (entity) => ENTITIES[entity] ?? entity);
+  return value
+    .replace(
+      /&(amp|lt|gt|quot|nbsp|#39);/g,
+      (entity) => ENTITIES[entity] ?? entity,
+    )
+    .replace(/&#(\d{2,5});/g, (_entity, code: string) =>
+      String.fromCodePoint(Number(code)),
+    );
 }
 
 // Collapses whitespace and removes volatile tokens such as dates and long hex identifiers.
@@ -48,10 +63,16 @@ function normalizeParagraph(value: string): string {
     .trim();
 }
 
-async function extractPage(response: Response): Promise<ExtractedPage> {
+function toParagraphs(text: string): string[] {
+  return text
+    .split("\n")
+    .map(normalizeParagraph)
+    .filter((paragraph) => paragraph.length >= 3);
+}
+
+// Streaming parser path: one handler per element, since several handlers on the same element lose end-tag callbacks.
+async function collectPage(response: Response): Promise<CollectedPage> {
   let title = "";
-  let metaDescription = "";
-  let canonicalUrl = "";
   let linkCount = 0;
   let skipDepth = 0;
   let headingParts: string[] = [];
@@ -63,16 +84,6 @@ async function extractPage(response: Response): Promise<ExtractedPage> {
     .on("title", {
       text(chunk) {
         title += chunk.text;
-      },
-    })
-    .on('meta[name="description"]', {
-      element(element) {
-        metaDescription = element.getAttribute("content") ?? "";
-      },
-    })
-    .on('link[rel="canonical"]', {
-      element(element) {
-        canonicalUrl = element.getAttribute("href") ?? "";
       },
     })
     .on("a[href]", {
@@ -88,7 +99,6 @@ async function extractPage(response: Response): Promise<ExtractedPage> {
         });
       },
     })
-    // One handler per element keeps a single end-tag callback, since several handlers on the same element did not all fire.
     .on(BLOCK_ELEMENTS, {
       element(element) {
         const isHeading = /^h[1-3]$/.test(element.tagName);
@@ -112,21 +122,100 @@ async function extractPage(response: Response): Promise<ExtractedPage> {
       },
     });
 
-  // The transformed body is drained without being buffered.
-  const body = rewriter.transform(response).body;
-  if (body) await body.pipeTo(new WritableStream());
+  await drain(rewriter.transform(response));
+  return { title: title.trim(), headings, linkCount, chunks };
+}
 
-  const paragraphs = decodeEntities(chunks.join(""))
-    .split("\n")
-    .map(normalizeParagraph)
-    .filter((paragraph) => paragraph.length >= 3);
+// Discards the transformed body without buffering it.
+async function drain(response: Response): Promise<void> {
+  if (response.body) await response.body.pipeTo(new WritableStream());
+}
 
-  return { title: title.trim(), metaDescription, canonicalUrl, headings, linkCount, paragraphs };
+// Regex path: removes non-content elements, turns block tags into line breaks, and strips the remaining tags.
+function stripHtml(html: string): string {
+  return decodeEntities(
+    html
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(
+        /<(script|style|noscript|svg|template|nav|footer)\b[\s\S]*?<\/\1\s*>/gi,
+        " ",
+      )
+      .replace(
+        /<\/?(?:p|li|h[1-6]|td|th|blockquote|figcaption|dt|dd|br)\b[^>]*>/gi,
+        "\n",
+      )
+      .replace(/<[^>]*>/g, " "),
+  );
+}
+
+// Regex path: page metadata, headings, and link count read directly from the HTML source.
+function extractMetadata(html: string): {
+  title: string;
+  metaDescription: string;
+  canonicalUrl: string;
+  headings: string[];
+  linkCount: number;
+} {
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "";
+  const metaDescription =
+    /<meta\b[^>]*\bname=["']description["'][^>]*\bcontent=["']([^"']*)["']/i.exec(
+      html,
+    )?.[1] ?? "";
+  const canonicalUrl =
+    /<link\b[^>]*\brel=["']canonical["'][^>]*\bhref=["']([^"']*)["']/i.exec(
+      html,
+    )?.[1] ?? "";
+  const headings = [
+    ...html.matchAll(/<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/gi),
+  ].map((match) => normalizeParagraph(stripHtml(match[1] ?? "")));
+  const linkCount = (html.match(/<a\b[^>]*\bhref=/gi) ?? []).length;
+  return {
+    title: normalizeParagraph(decodeEntities(title)),
+    metaDescription,
+    canonicalUrl,
+    headings,
+    linkCount,
+  };
+}
+
+// Reads at most maxBytes from the body and cancels the rest of the download.
+async function readLimited(
+  response: Response,
+  maxBytes: number,
+): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    total += value.byteLength;
+  }
+  await reader.cancel();
+  const joined = new Uint8Array(Math.min(total, maxBytes));
+  let offset = 0;
+  for (const part of parts) {
+    const slice = part.subarray(
+      0,
+      Math.min(part.byteLength, joined.byteLength - offset),
+    );
+    joined.set(slice, offset);
+    offset += slice.byteLength;
+    if (offset >= joined.byteLength) break;
+  }
+  return new TextDecoder().decode(joined);
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // Counts word insertions and deletions between two paragraphs using a longest-common-subsequence table.
@@ -144,14 +233,14 @@ function countWordEdits(before: string, after: string): number {
     }
     [previousRow, currentRow] = [currentRow, previousRow];
   }
-  const common = previousRow[b.length] ?? 0;
-  return a.length + b.length - 2 * common;
+  return a.length + b.length - 2 * (previousRow[b.length] ?? 0);
 }
 
 // Compares paragraph multisets, then runs a word-level comparison on a bounded number of changed pairs.
 function diffParagraphs(previous: string[], current: string[]): DiffSummary {
   const remaining = new Map<string, number>();
-  for (const paragraph of previous) remaining.set(paragraph, (remaining.get(paragraph) ?? 0) + 1);
+  for (const paragraph of previous)
+    remaining.set(paragraph, (remaining.get(paragraph) ?? 0) + 1);
 
   const added: string[] = [];
   for (const paragraph of current) {
@@ -166,7 +255,8 @@ function diffParagraphs(previous: string[], current: string[]): DiffSummary {
 
   const pairs = Math.min(added.length, removed.length, MAX_WORD_DIFFS);
   let wordEdits = 0;
-  for (let i = 0; i < pairs; i += 1) wordEdits += countWordEdits(removed[i] ?? "", added[i] ?? "");
+  for (let i = 0; i < pairs; i += 1)
+    wordEdits += countWordEdits(removed[i] ?? "", added[i] ?? "");
   return { added: added.length, removed: removed.length, wordEdits };
 }
 
@@ -174,72 +264,166 @@ function diffParagraphs(previous: string[], current: string[]): DiffSummary {
 function mutateParagraphs(paragraphs: string[]): string[] {
   return paragraphs
     .filter((_, index) => index % 50 !== 7)
-    .map((paragraph, index) => (index % 33 === 5 ? `${paragraph} (older wording)` : paragraph));
+    .map((paragraph, index) =>
+      index % 33 === 5 ? `${paragraph} (older wording)` : paragraph,
+    );
 }
 
-async function loadAsset(env: SpikeEnv, path: string): Promise<Response | null> {
-  const response = await env.ASSETS.fetch(new Request(`https://assets.invalid/${path}`));
+// Runs one cumulative pipeline stage and returns small counters (no page content).
+async function runVariant(
+  variant: string,
+  response: Response,
+  previous: string[] | null,
+): Promise<Result | null> {
+  switch (variant) {
+    case "read":
+      return { bytes: (await response.arrayBuffer()).byteLength };
+    case "h1-parse": {
+      await drain(
+        new HTMLRewriter().on("title", { text() {} }).transform(response),
+      );
+      return { parsed: true };
+    }
+    case "h2-handlers": {
+      const page = await collectPage(response);
+      return {
+        chunks: page.chunks.length,
+        headings: page.headings.length,
+        links: page.linkCount,
+      };
+    }
+    case "h3-normalize":
+    case "h4-hash":
+    case "h5-diff": {
+      const page = await collectPage(response);
+      const paragraphs = toParagraphs(decodeEntities(page.chunks.join("")));
+      if (variant === "h3-normalize") return { paragraphs: paragraphs.length };
+      const hash = (await sha256Hex(paragraphs.join("\n"))).slice(0, 12);
+      if (variant === "h4-hash") return { paragraphs: paragraphs.length, hash };
+      return {
+        paragraphs: paragraphs.length,
+        hash,
+        diff: diffParagraphs(
+          previous ?? mutateParagraphs(paragraphs),
+          paragraphs,
+        ),
+      };
+    }
+    case "r1-strip":
+      return { textChars: stripHtml(await response.text()).length };
+    case "r2-normalize":
+      return {
+        paragraphs: toParagraphs(stripHtml(await response.text())).length,
+      };
+    case "r3-hash": {
+      const paragraphs = toParagraphs(stripHtml(await response.text()));
+      return {
+        paragraphs: paragraphs.length,
+        hash: (await sha256Hex(paragraphs.join("\n"))).slice(0, 12),
+      };
+    }
+    case "r4-diff":
+    case "r5-trunc-diff": {
+      const html =
+        variant === "r4-diff"
+          ? await response.text()
+          : await readLimited(response, TRUNCATE_BYTES);
+      const paragraphs = toParagraphs(stripHtml(html));
+      const hash = (await sha256Hex(paragraphs.join("\n"))).slice(0, 12);
+      return {
+        htmlChars: html.length,
+        paragraphs: paragraphs.length,
+        hash,
+        diff: diffParagraphs(
+          previous ?? mutateParagraphs(paragraphs),
+          paragraphs,
+        ),
+      };
+    }
+    case "r6-full": {
+      const html = await response.text();
+      const metadata = extractMetadata(html);
+      const paragraphs = toParagraphs(stripHtml(html));
+      const hash = (await sha256Hex(paragraphs.join("\n"))).slice(0, 12);
+      return {
+        htmlChars: html.length,
+        headings: metadata.headings.length,
+        links: metadata.linkCount,
+        titleChars: metadata.title.length,
+        paragraphs: paragraphs.length,
+        hash,
+        diff: diffParagraphs(
+          previous ?? mutateParagraphs(paragraphs),
+          paragraphs,
+        ),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+async function loadAsset(
+  env: SpikeEnv,
+  path: string,
+): Promise<Response | null> {
+  const response = await env.ASSETS.fetch(
+    new Request(`https://assets.invalid/${path}`),
+  );
   return response.ok ? response : null;
 }
 
-async function summarize(
-  page: ExtractedPage,
-  htmlBytes: number | null,
-  diff: DiffSummary | null,
-): Promise<Record<string, unknown>> {
-  return {
-    htmlBytes,
-    title: page.title,
-    headings: page.headings.length,
-    firstHeading: page.headings[0] ?? null,
-    links: page.linkCount,
-    paragraphs: page.paragraphs.length,
-    textChars: page.paragraphs.reduce((sum, p) => sum + p.length, 0),
-    contentHash: (await sha256Hex(page.paragraphs.join("\n"))).slice(0, 12),
-    diff,
-  };
-}
-
-async function handleFixture(env: SpikeEnv, params: URLSearchParams): Promise<Response> {
+async function handleFixture(
+  env: SpikeEnv,
+  params: URLSearchParams,
+): Promise<Response> {
   const name = params.get("name") ?? "";
-  const operation = params.get("op") ?? "extract";
-  if (!FIXTURE_NAME.test(name)) return Response.json({ error: "bad_fixture" }, { status: 400 });
+  const variant = params.get("variant") ?? "";
+  if (!FIXTURE_NAME.test(name))
+    return Response.json({ error: "bad_fixture" }, { status: 400 });
 
-  if (operation === "diff") {
-    const [edited, previousText] = await Promise.all([
-      loadAsset(env, `${name}-edited.html`),
-      loadAsset(env, `${name}.txt`),
-    ]);
-    if (!edited || !previousText) return Response.json({ error: "fixture_missing" }, { status: 404 });
-    const page = await extractPage(edited);
-    const previous = (await previousText.text()).split("\n");
-    return Response.json(await summarize(page, null, diffParagraphs(previous, page.paragraphs)));
-  }
+  const needsDiff = DIFF_VARIANTS.has(variant);
+  const [page, oldText] = await Promise.all([
+    loadAsset(env, needsDiff ? `${name}-edited.html` : `${name}.html`),
+    needsDiff ? loadAsset(env, `${name}.txt`) : Promise.resolve(null),
+  ]);
+  if (!page || (needsDiff && !oldText))
+    return Response.json({ error: "fixture_missing" }, { status: 404 });
 
-  const html = await loadAsset(env, `${name}.html`);
-  if (!html) return Response.json({ error: "fixture_missing" }, { status: 404 });
-  return Response.json(await summarize(await extractPage(html), null, null));
+  const previous = oldText ? (await oldText.text()).split("\n") : null;
+  const result = await runVariant(variant, page, previous);
+  if (!result)
+    return Response.json({ error: "unknown_variant" }, { status: 400 });
+  return Response.json({ variant, name, ...result });
 }
 
-async function handleUrl(env: SpikeEnv, params: URLSearchParams): Promise<Response> {
+async function handleUrl(
+  env: SpikeEnv,
+  params: URLSearchParams,
+): Promise<Response> {
   const urls = (env.SPIKE_URLS ?? "")
     .split(",")
     .map((value) => value.trim())
     .filter((value) => /^https?:\/\//.test(value));
   const target = urls[Number(params.get("i") ?? "0")];
-  if (!target) return Response.json({ error: "no_such_url_index" }, { status: 404 });
+  if (!target)
+    return Response.json({ error: "no_such_url_index" }, { status: 404 });
 
-  const response = await fetch(target, { headers: { "User-Agent": "cpu-spike/0.1" } });
-  const page = await extractPage(response);
-  const diff =
-    params.get("op") === "diff" ? diffParagraphs(mutateParagraphs(page.paragraphs), page.paragraphs) : null;
-  return Response.json({ status: response.status, ...(await summarize(page, null, diff)) });
+  const variant = params.get("variant") ?? "h4-hash";
+  const response = await fetch(target, {
+    headers: { "User-Agent": "cpu-spike/0.1" },
+  });
+  const result = await runVariant(variant, response, null);
+  if (!result)
+    return Response.json({ error: "unknown_variant" }, { status: 400 });
+  return Response.json({ variant, status: response.status, ...result });
 }
 
 export default {
   async fetch(request: Request, env: SpikeEnv): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/spike/fixture") return handleFixture(env, url.searchParams);
+    if (url.pathname === "/spike/fixture")
+      return handleFixture(env, url.searchParams);
     if (url.pathname === "/spike/url") return handleUrl(env, url.searchParams);
     return Response.json({ error: "not_found" }, { status: 404 });
   },
