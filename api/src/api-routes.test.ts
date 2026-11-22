@@ -18,6 +18,8 @@ function buildEnv(options: { demoReachable?: boolean } = {}): Env {
   return {
     DB_PRIVATE: fakeDatabase(true),
     DB_DEMO: fakeDatabase(options.demoReachable ?? true),
+    OWNER_ACCESS_KEY: "k".repeat(64),
+    SESSION_SECRET: "s".repeat(64),
   };
 }
 
@@ -32,7 +34,11 @@ describe("GET /api/health", () => {
   });
 
   it("reports degraded with a 503 when a database is unavailable", async () => {
-    const response = await app.request("/api/health", {}, buildEnv({ demoReachable: false }));
+    const response = await app.request(
+      "/api/health",
+      {},
+      buildEnv({ demoReachable: false }),
+    );
     const body = (await response.json()) as HealthResponse;
 
     expect(response.status).toBe(503);

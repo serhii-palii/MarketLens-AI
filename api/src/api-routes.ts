@@ -1,8 +1,7 @@
 // FILE: api/src/api-routes.ts
 // REST route definitions for the API Worker.
 import { Hono } from "hono";
-
-type AppEnv = { Bindings: Env };
+import { authRoutes, requireOwner, type AppEnv } from "./owner-auth";
 
 export type DatabaseStatus = "ok" | "unavailable";
 
@@ -25,6 +24,12 @@ async function checkDatabase(db: D1Database): Promise<DatabaseStatus> {
 export const app = new Hono<AppEnv>();
 
 // The frontend is served from the same origin, so no cross-origin (CORS) access is configured.
+
+app.route("/api/auth", authRoutes);
+
+// Everything under /api/owner requires a valid owner session.
+app.use("/api/owner/*", requireOwner);
+app.get("/api/owner/me", (c) => c.json({ role: "owner" }));
 
 app.get("/api/health", async (c) => {
   const [privateStatus, demoStatus] = await Promise.all([

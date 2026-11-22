@@ -3,9 +3,7 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "bundler",
-    "lib": [
-      "ES2022"
-    ],
+    "lib": ["ES2022"],
     "types": [],
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -15,9 +13,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": [
-    "src",
-    "spikes/*.ts",
-    "worker-configuration.d.ts"
-  ]
+  "include": ["src", "worker-configuration.d.ts"]
 }
