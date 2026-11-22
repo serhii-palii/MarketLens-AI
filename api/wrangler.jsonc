@@ -14,13 +14,12 @@
     {
       "binding": "DB_PRIVATE",
       "database_name": "marketlens-private",
-      // Placeholder ID; replaced with the real ID from `wrangler d1 create` before deployment.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "132443b2-f7a2-4fd1-988c-95a867193e9c",
     },
     {
       "binding": "DB_DEMO",
       "database_name": "marketlens-demo",
-      "database_id": "00000000-0000-0000-0000-000000000001",
+      "database_id": "6b72e250-51d0-47b1-a082-ae162d1421c8",
     },
   ],
 }
