@@ -14,6 +14,7 @@ MarketLens AI monitors publicly available competitor and market information, det
 - Frontend shell (React) that calls the API and displays connection status.
 - Automated tests for the health endpoint, cross-origin behavior, and error responses.
 - Initial database schema (migration) with automated tests for constraints, cascades, and immutable review history.
+- Owner login with a signed session cookie, and an owner-only API for managing competitors and monitored pages, with input validation.
 
 ## Limitations
 

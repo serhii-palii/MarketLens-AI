@@ -2,6 +2,7 @@
 // REST route definitions for the API Worker.
 import { Hono } from "hono";
 import { authRoutes, requireOwner, type AppEnv } from "./owner-auth";
+import { ownerRoutes } from "./owner-routes";
 
 export type DatabaseStatus = "ok" | "unavailable";
 
@@ -29,7 +30,7 @@ app.route("/api/auth", authRoutes);
 
 // Everything under /api/owner requires a valid owner session.
 app.use("/api/owner/*", requireOwner);
-app.get("/api/owner/me", (c) => c.json({ role: "owner" }));
+app.route("/api/owner", ownerRoutes);
 
 app.get("/api/health", async (c) => {
   const [privateStatus, demoStatus] = await Promise.all([
