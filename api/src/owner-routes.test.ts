@@ -235,12 +235,34 @@ describe("monitored pages", () => {
         category: "marketing",
         checkIntervalHours: 1.5,
       },
+      { url: "http://localhost/admin", category: "marketing" },
+      { url: "http://127.0.0.1/", category: "marketing" },
+      {
+        url: "http://169.254.169.254/latest/meta-data/",
+        category: "marketing",
+      },
+      { url: "http://[::1]/", category: "marketing" },
+      { url: "http://2130706433/", category: "marketing" },
+      { url: "https://acme.example.test:8443/", category: "marketing" },
+      { url: "http://metadata.google.internal/", category: "marketing" },
     ];
     for (const body of bodies)
       expect(
         (await call("POST", `/competitors/${id}/pages`, body)).status,
       ).toBe(400);
     expect(rowCount("monitored_pages")).toBe(0);
+  });
+
+  it("explains why an internal address was refused", async () => {
+    const id = await createCompetitor();
+    const result = await call("POST", `/competitors/${id}/pages`, {
+      url: "http://10.0.0.5/",
+      category: "product",
+    });
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.json)).toContain(
+      "Use a domain name instead of an IP address.",
+    );
   });
 
   it("treats the same address with a different fragment as a duplicate", async () => {

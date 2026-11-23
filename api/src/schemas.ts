@@ -1,6 +1,7 @@
 // FILE: api/src/schemas.ts
 // Runtime validation schemas for API request bodies.
 import { z } from "zod";
+import { REJECTION_MESSAGES, checkMonitoredUrl } from "./url-safety";
 
 // Intelligence categories are configuration: adding a value here makes it available for monitored pages.
 export const INTELLIGENCE_CATEGORIES = ["marketing", "product"] as const;
@@ -11,7 +12,7 @@ export const loginRequestSchema = z.strictObject({
 });
 
 // Accepts http and https addresses without embedded credentials and removes the fragment.
-// Destination safety checks (private ranges, redirects) are added with the collection engine.
+// Used for informational links that the collection engine never contacts.
 const webUrlSchema = z
   .string()
   .trim()
@@ -42,6 +43,19 @@ const webUrlSchema = z
     return parsed.toString();
   });
 
+// Addresses the collection engine will contact must also pass the destination safety rules.
+const monitoredUrlSchema = z.string().transform((value, context) => {
+  const result = checkMonitoredUrl(value);
+  if (!result.ok) {
+    context.addIssue({
+      code: "custom",
+      message: REJECTION_MESSAGES[result.reason],
+    });
+    return z.NEVER;
+  }
+  return result.url;
+});
+
 const atLeastOneField = (value: object) => Object.keys(value).length > 0;
 const atLeastOneFieldMessage = { message: "At least one field is required." };
 
@@ -62,7 +76,7 @@ export const updateCompetitorSchema = z
   .refine(atLeastOneField, atLeastOneFieldMessage);
 
 export const createPageSchema = z.strictObject({
-  url: webUrlSchema,
+  url: monitoredUrlSchema,
   label: z.string().trim().max(200).optional(),
   category: z.enum(INTELLIGENCE_CATEGORIES),
   checkIntervalHours: z.number().int().min(1).max(720).optional(),
