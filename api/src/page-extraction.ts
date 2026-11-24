@@ -7,6 +7,10 @@ const MAX_HEADINGS = 50;
 const MAX_LINKS = 100;
 const MAX_TAGS_SCANNED = 150;
 const MAX_UNCLOSED = 20;
+// Only this much HTML is analyzed. The fetcher may read more, so the main content can be located first.
+const MAX_REGION_CHARS = 250_000;
+const HEAD_SCAN_CHARS = 60_000;
+const MIN_REGION_PARAGRAPHS = 3;
 
 const ENTITIES: Record<string, string> = {
   "&amp;": "&",
@@ -38,13 +42,14 @@ const ENTITIES: Record<string, string> = {
 const TAG = "<[^<>]{0,1000}>";
 const COMMENT = /<!--[\s\S]*?-->/g;
 const SKIPPED_ELEMENT =
-  /<(script|style|noscript|svg|template|nav|footer)\b[\s\S]*?<\/\1\s*>/gi;
+  /<(script|style|noscript|svg|template|nav|footer|aside)\b[\s\S]*?<\/\1\s*>/gi;
 const BLOCK_TAG =
   /<\/?(?:p|li|ul|ol|h[1-6]|td|th|tr|div|section|article|blockquote|figcaption|dt|dd|br)\b[^<>]{0,1000}>/gi;
 const ANY_TAG = new RegExp(TAG, "g");
-const OPENERS = /<!--|<(script|style|noscript|svg|template|nav|footer)\b/gi;
+const OPENERS =
+  /<!--|<(script|style|noscript|svg|template|nav|footer|aside)\b/gi;
 const CLOSERS =
-  /(-->|<\/(?:script|style|noscript|svg|template|nav|footer)\s*>)/gi;
+  /(-->|<\/(?:script|style|noscript|svg|template|nav|footer|aside)\s*>)/gi;
 
 export interface ExtractedPage {
   title: string;
@@ -54,6 +59,9 @@ export interface ExtractedPage {
   links: string[];
   paragraphs: string[];
   contentHash: string;
+  // Which part of the document the text and links came from, and whether that part was cut at the size limit.
+  regionSource: "main" | "role_main" | "article" | "start";
+  regionTruncated: boolean;
 }
 
 export type ExtractionResult =
@@ -156,19 +164,111 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+interface Region {
+  html: string;
+  source: ExtractedPage["regionSource"];
+  truncated: boolean;
+}
+
+interface RegionContent {
+  headings: string[];
+  links: string[];
+  paragraphs: string[];
+}
+
+// Finds where the main content starts, so a large menu or script block ahead of it cannot push it out of the window.
+function candidateRegions(html: string): Region[] {
+  const candidates: Region[] = [];
+  const markers: { pattern: RegExp; source: Region["source"] }[] = [
+    { pattern: /<main[\s>]/i, source: "main" },
+    { pattern: /\brole\s*=\s*["']main["']/i, source: "role_main" },
+    { pattern: /<article[\s>]/i, source: "article" },
+  ];
+  for (const { pattern, source } of markers) {
+    const found = html.search(pattern);
+    if (found === -1) continue;
+    const start =
+      source === "role_main"
+        ? Math.max(0, html.lastIndexOf("<", found))
+        : found;
+    let region = html.slice(start, start + MAX_REGION_CHARS + 1);
+    let truncated = region.length > MAX_REGION_CHARS;
+    if (source === "main") {
+      const closing = /<\/main\s*>/i.exec(region);
+      if (closing) {
+        region = region.slice(0, closing.index + closing[0].length);
+        truncated = false;
+      }
+    }
+    candidates.push({
+      html: region.slice(0, MAX_REGION_CHARS),
+      source,
+      truncated,
+    });
+  }
+  candidates.push({
+    html: html.slice(0, MAX_REGION_CHARS),
+    source: "start",
+    truncated: html.length > MAX_REGION_CHARS,
+  });
+  return candidates;
+}
+
+function analyzeRegion(
+  regionHtml: string,
+  baseUrl: string,
+): RegionContent | null {
+  if (isMalformed(regionHtml)) return null;
+
+  const headings: string[] = [];
+  for (const match of regionHtml.matchAll(
+    /<h([1-3])\b[^<>]{0,1000}>([\s\S]{0,2000}?)<\/h\1\s*>/gi,
+  )) {
+    const heading = stripTags(match[2] ?? "").slice(0, 300);
+    if (heading) headings.push(heading);
+    if (headings.length >= MAX_HEADINGS) break;
+  }
+
+  const links = new Set<string>();
+  for (const match of regionHtml.matchAll(
+    /<a\b[^<>]{0,1000}?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]+))/gi,
+  )) {
+    const resolved = resolveHttpUrl(
+      match[1] ?? match[2] ?? match[3] ?? "",
+      baseUrl,
+    );
+    if (resolved) links.add(resolved);
+    if (links.size >= MAX_LINKS) break;
+  }
+
+  const text = decodeEntities(
+    regionHtml
+      .replace(COMMENT, " ")
+      .replace(SKIPPED_ELEMENT, " ")
+      .replace(BLOCK_TAG, "\n")
+      .replace(ANY_TAG, " "),
+  );
+  const paragraphs = text
+    .split("\n")
+    .map((line) => normalizeText(line).slice(0, MAX_PARAGRAPH_LENGTH))
+    .filter((paragraph) => paragraph.length >= 3)
+    .slice(0, MAX_PARAGRAPHS);
+  return { headings, links: [...links], paragraphs };
+}
+
 export async function extractPage(
   html: string,
   baseUrl: string,
 ): Promise<ExtractionResult> {
-  if (isMalformed(html)) return { ok: false, reason: "malformed_html" };
-
+  // Title, description, and canonical address live in the head, near the start of the document.
+  const head = html.slice(0, HEAD_SCAN_CHARS);
   const titleMatch = /<title\b[^<>]{0,200}>([\s\S]{0,1000}?)<\/title\s*>/i.exec(
-    html,
+    head,
   );
   const title = titleMatch ? stripTags(titleMatch[1] ?? "").slice(0, 300) : "";
 
   let metaDescription = "";
-  for (const meta of firstTags(html, /<meta\b[^<>]{0,1000}>/gi)) {
+  for (const meta of firstTags(head, /<meta\b[^<>]{0,1000}>/gi)) {
     const key = (meta.get("name") ?? meta.get("property") ?? "").toLowerCase();
     if (
       key === "description" ||
@@ -182,7 +282,7 @@ export async function extractPage(
   }
 
   let canonicalUrl: string | null = null;
-  for (const link of firstTags(html, /<link\b[^<>]{0,1000}>/gi)) {
+  for (const link of firstTags(head, /<link\b[^<>]{0,1000}>/gi)) {
     if (
       (link.get("rel") ?? "").toLowerCase().split(/\s+/).includes("canonical")
     ) {
@@ -191,42 +291,25 @@ export async function extractPage(
     }
   }
 
-  const headings: string[] = [];
-  for (const match of html.matchAll(
-    /<h([1-3])\b[^<>]{0,1000}>([\s\S]{0,2000}?)<\/h\1\s*>/gi,
-  )) {
-    const heading = stripTags(match[2] ?? "").slice(0, 300);
-    if (heading) headings.push(heading);
-    if (headings.length >= MAX_HEADINGS) break;
+  // The first region that yields real text wins; the start of the document is the last resort.
+  const candidates = candidateRegions(html);
+  let chosen: { region: Region; content: RegionContent } | null = null;
+  for (const region of candidates) {
+    const content = analyzeRegion(region.html, baseUrl);
+    if (!content) continue;
+    if (
+      content.paragraphs.length >= MIN_REGION_PARAGRAPHS ||
+      region.source === "start"
+    ) {
+      chosen = { region, content };
+      break;
+    }
   }
+  if (!chosen) return { ok: false, reason: "malformed_html" };
 
-  const links = new Set<string>();
-  for (const match of html.matchAll(
-    /<a\b[^<>]{0,1000}?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]+))/gi,
-  )) {
-    const resolved = resolveHttpUrl(
-      match[1] ?? match[2] ?? match[3] ?? "",
-      baseUrl,
-    );
-    if (resolved) links.add(resolved);
-    if (links.size >= MAX_LINKS) break;
-  }
-
-  const text = decodeEntities(
-    html
-      .replace(COMMENT, " ")
-      .replace(SKIPPED_ELEMENT, " ")
-      .replace(BLOCK_TAG, "\n")
-      .replace(ANY_TAG, " "),
-  );
-  const paragraphs = text
-    .split("\n")
-    .map((line) => normalizeText(line).slice(0, MAX_PARAGRAPH_LENGTH))
-    .filter((paragraph) => paragraph.length >= 3)
-    .slice(0, MAX_PARAGRAPHS);
-
+  const { region, content } = chosen;
   const contentHash = await sha256Hex(
-    `${title}\n${metaDescription}\n${paragraphs.join("\n")}`,
+    `${title}\n${metaDescription}\n${content.paragraphs.join("\n")}`,
   );
   return {
     ok: true,
@@ -234,10 +317,12 @@ export async function extractPage(
       title,
       metaDescription,
       canonicalUrl,
-      headings,
-      links: [...links],
-      paragraphs,
+      headings: content.headings,
+      links: content.links,
+      paragraphs: content.paragraphs,
       contentHash,
+      regionSource: region.source,
+      regionTruncated: region.truncated,
     },
   };
 }

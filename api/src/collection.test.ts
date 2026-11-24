@@ -2,7 +2,7 @@
 // Tests for the page fetcher using a simulated network: redirects, DNS answers, robots.txt, limits, and failures.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  MAX_HTML_BYTES,
+  MAX_FETCH_BYTES,
   MAX_REDIRECTS,
   USER_AGENT,
   collectPage,
@@ -381,7 +381,7 @@ describe("response limits and failures", () => {
 
   it("reads only the allowed number of bytes and cancels the rest", async () => {
     let cancelled = false;
-    const chunk = new TextEncoder().encode("x".repeat(100_000));
+    const chunk = new TextEncoder().encode("x".repeat(300_000));
     let sent = 0;
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
@@ -401,9 +401,9 @@ describe("response limits and failures", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      page: { bytesRead: MAX_HTML_BYTES, truncated: true },
+      page: { bytesRead: MAX_FETCH_BYTES, truncated: true },
     });
-    expect(result.ok && result.page.html.length).toBe(MAX_HTML_BYTES);
+    expect(result.ok && result.page.html.length).toBe(MAX_FETCH_BYTES);
     expect(cancelled).toBe(true);
     expect(sent).toBeLessThan(10);
   });

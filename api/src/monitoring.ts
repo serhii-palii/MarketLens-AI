@@ -37,6 +37,7 @@ export interface CheckResult {
   httpStatus: number | null;
   bytesRead: number | null;
   truncated: boolean | null;
+  extractedFrom: string | null;
 }
 
 // 15 minutes after the first failure, doubling each time, up to one day.
@@ -64,6 +65,7 @@ const failed = (
   httpStatus,
   bytesRead: null,
   truncated: null,
+  extractedFrom: null,
 });
 
 // Returns null when the page does not exist. Failures are recorded on the page and returned, not thrown.
@@ -146,10 +148,13 @@ export async function checkMonitoredPage(
 
     const content = extraction.page;
     const nextCheckAt = addMinutes(started, page.checkIntervalHours * 60);
+    // "Truncated" means some of the page was not analyzed: cut at the download limit or at the analysis window.
+    const truncated = fetched.truncated || content.regionTruncated;
     const summary = {
       httpStatus: fetched.status,
       bytesRead: fetched.bytesRead,
-      truncated: fetched.truncated,
+      truncated,
+      extractedFrom: content.regionSource,
       reason: null,
     };
 
@@ -177,7 +182,7 @@ export async function checkMonitoredPage(
       mainText: content.paragraphs.join("\n"),
       httpStatus: fetched.status,
       htmlBytes: fetched.bytesRead,
-      truncated: fetched.truncated,
+      truncated,
       fetchedAt: now,
       nextCheckAt,
     });

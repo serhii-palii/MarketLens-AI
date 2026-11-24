@@ -3,7 +3,8 @@
 import { isAllowedByRobots } from "./robots";
 import { checkMonitoredUrl, isPublicIpAddress } from "./url-safety";
 
-export const MAX_HTML_BYTES = 250_000;
+// The fetcher reads up to this much HTML; extraction then analyzes a bounded region of it.
+export const MAX_FETCH_BYTES = 1_000_000;
 export const MAX_REDIRECTS = 3;
 export const REQUEST_TIMEOUT_MS = 8_000;
 export const ROBOTS_TTL_MS = 24 * 60 * 60 * 1000;
@@ -312,7 +313,7 @@ export async function collectPage(
   const initial = checkMonitoredUrl(inputUrl);
   if (!initial.ok) return failure("invalid_url");
 
-  const maxBytes = options.maxBytes ?? MAX_HTML_BYTES;
+  const maxBytes = options.maxBytes ?? MAX_FETCH_BYTES;
   const redirects: string[] = [];
   let current = initial.url;
 

@@ -3,6 +3,7 @@
   "name": "marketlens-ai",
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
   "assets": {
     // Built frontend, served by the same Worker as the API.
     "directory": "../web/dist",
