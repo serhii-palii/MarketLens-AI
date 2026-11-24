@@ -2,7 +2,7 @@
 // Tests for the initial schema: constraints, cascades, immutability rules, and the scheduler index.
 import initSqlJs, { type Database, type SqlValue } from "sql.js";
 import { beforeEach, describe, expect, it } from "vitest";
-import schemaSql from "../migrations/0001_initial_schema.sql?raw";
+import { MIGRATIONS } from "./test-database";
 
 const SQL = await initSqlJs();
 const T = "2026-01-01T00:00:00.000Z";
@@ -50,7 +50,7 @@ function seedChain() {
 beforeEach(() => {
   db = new SQL.Database();
   db.run("PRAGMA foreign_keys = ON");
-  db.exec(schemaSql);
+  for (const migration of MIGRATIONS) db.exec(migration);
 });
 
 describe("schema creation", () => {
@@ -62,6 +62,7 @@ describe("schema creation", () => {
       "ai_analyses",
       "changes",
       "competitors",
+      "domain_policies",
       "monitored_pages",
       "monitoring_runs",
       "review_actions",
@@ -206,6 +207,28 @@ describe("cascades", () => {
     expect(() =>
       db.run("DELETE FROM monitoring_runs WHERE id = 1"),
     ).not.toThrow();
+  });
+});
+
+describe("domain policies", () => {
+  const insert = (kind: string, text = "") =>
+    db.run(
+      "INSERT INTO domain_policies (origin, robots_kind, robots_text, fetched_at_ms) VALUES ('https://example.test', ?, ?, 1)",
+      [kind, text],
+    );
+
+  it("stores one robots entry per origin and limits its kind", () => {
+    insert("rules", "User-agent: *");
+    expect(() => insert("rules")).toThrow(/UNIQUE|PRIMARY/);
+    expect(() =>
+      db.run(
+        "INSERT INTO domain_policies (origin, robots_kind, fetched_at_ms) VALUES ('https://other.test', 'maybe', 1)",
+      ),
+    ).toThrow(/CHECK/);
+  });
+
+  it("limits the stored robots text", () => {
+    expect(() => insert("rules", "x".repeat(100_001))).toThrow(/CHECK/);
   });
 });
 
