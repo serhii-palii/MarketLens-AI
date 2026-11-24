@@ -2,6 +2,7 @@
 // Owner-only routes for managing competitors and monitored pages.
 import { Hono, type Context } from "hono";
 import type { ZodError, ZodType } from "zod";
+import { collectPage } from "./collection";
 import {
   createCompetitor,
   createPage,
@@ -14,6 +15,12 @@ import {
   updateCompetitor,
   updatePage,
 } from "./database";
+import { checkMonitoredPage } from "./monitoring";
+import {
+  createRobotsCache,
+  getSnapshot,
+  listSnapshots,
+} from "./monitoring-store";
 import type { AppEnv } from "./owner-auth";
 import {
   createCompetitorSchema,
@@ -180,4 +187,36 @@ ownerRoutes.delete("/pages/:id", async (c) => {
   return (await deletePage(c.env.DB_PRIVATE, id))
     ? c.body(null, 204)
     : notFound(c);
+});
+
+// Runs a check right now. The outcome (including a failed fetch) is returned with HTTP 200; only an unknown page is an error.
+ownerRoutes.post("/pages/:id/check", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (id === null) return badId(c);
+  const db = c.env.DB_PRIVATE;
+  const result = await checkMonitoredPage(db, id, "manual", {
+    // The wrapper calls the global fetch without a receiver object, which the Workers runtime requires.
+    collect: (url) =>
+      collectPage(url, {
+        fetch: (input, init) => fetch(input, init),
+        robots: createRobotsCache(db),
+      }),
+    now: () => new Date(),
+  });
+  return result ? c.json({ result }) : notFound(c);
+});
+
+ownerRoutes.get("/pages/:id/snapshots", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (id === null) return badId(c);
+  if (!(await getPage(c.env.DB_PRIVATE, id))) return notFound(c);
+  return c.json({ snapshots: await listSnapshots(c.env.DB_PRIVATE, id) });
+});
+
+// Snapshot text comes from external sites: clients must display it as plain text, never as HTML.
+ownerRoutes.get("/snapshots/:id", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (id === null) return badId(c);
+  const snapshot = await getSnapshot(c.env.DB_PRIVATE, id);
+  return snapshot ? c.json({ snapshot }) : notFound(c);
 });

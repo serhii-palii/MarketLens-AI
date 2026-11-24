@@ -15,6 +15,7 @@ MarketLens AI monitors publicly available competitor and market information, det
 - Automated tests for the health endpoint, cross-origin behavior, and error responses.
 - Initial database schema (migration) with automated tests for constraints, cascades, and immutable review history.
 - Owner login with a signed session cookie, and an owner-only API for managing competitors and monitored pages, with input validation.
+- Safe page collection (URL and DNS checks, robots.txt, size and redirect limits), content extraction, and snapshot storage, runnable on demand through the owner API.
 
 ## Limitations
 
