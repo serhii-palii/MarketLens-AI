@@ -38,13 +38,14 @@ const ENTITIES: Record<string, string> = {
   "&pound;": "£",
 };
 
-// Tags are matched with bounded patterns so that markup full of unmatched brackets cannot cause runaway scanning.
-const TAG = "<[^<>]{0,1000}>";
+// Tag patterns cannot cross another "<", so each stretch of text is scanned at most once and the cost stays linear.
+// The length limit is generous because real pages carry very long attributes (inline data, serialized component props).
+const TAG = "<[^<>]{0,60000}>";
 const COMMENT = /<!--[\s\S]*?-->/g;
 const SKIPPED_ELEMENT =
   /<(script|style|noscript|svg|template|nav|footer|aside)\b[\s\S]*?<\/\1\s*>/gi;
 const BLOCK_TAG =
-  /<\/?(?:p|li|ul|ol|h[1-6]|td|th|tr|div|section|article|blockquote|figcaption|dt|dd|br)\b[^<>]{0,1000}>/gi;
+  /<\/?(?:p|li|ul|ol|h[1-6]|td|th|tr|div|section|article|blockquote|figcaption|dt|dd|br)\b[^<>]{0,60000}>/gi;
 const ANY_TAG = new RegExp(TAG, "g");
 const OPENERS =
   /<!--|<(script|style|noscript|svg|template|nav|footer|aside)\b/gi;
@@ -220,9 +221,14 @@ function analyzeRegion(
 ): RegionContent | null {
   if (isMalformed(regionHtml)) return null;
 
+  // Comments, scripts, styles, and inline graphics are removed first so they cannot leak into headings or text.
+  const cleaned = regionHtml
+    .replace(COMMENT, " ")
+    .replace(SKIPPED_ELEMENT, " ");
+
   const headings: string[] = [];
-  for (const match of regionHtml.matchAll(
-    /<h([1-3])\b[^<>]{0,1000}>([\s\S]{0,2000}?)<\/h\1\s*>/gi,
+  for (const match of cleaned.matchAll(
+    /<h([1-3])\b[^<>]{0,60000}>([\s\S]{0,2000}?)<\/h\1\s*>/gi,
   )) {
     const heading = stripTags(match[2] ?? "").slice(0, 300);
     if (heading) headings.push(heading);
@@ -231,7 +237,7 @@ function analyzeRegion(
 
   const links = new Set<string>();
   for (const match of regionHtml.matchAll(
-    /<a\b[^<>]{0,1000}?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]+))/gi,
+    /<a\b[^<>]{0,5000}?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]+))/gi,
   )) {
     const resolved = resolveHttpUrl(
       match[1] ?? match[2] ?? match[3] ?? "",
@@ -242,11 +248,7 @@ function analyzeRegion(
   }
 
   const text = decodeEntities(
-    regionHtml
-      .replace(COMMENT, " ")
-      .replace(SKIPPED_ELEMENT, " ")
-      .replace(BLOCK_TAG, "\n")
-      .replace(ANY_TAG, " "),
+    cleaned.replace(BLOCK_TAG, "\n").replace(ANY_TAG, " "),
   );
   const paragraphs = text
     .split("\n")

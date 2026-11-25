@@ -303,3 +303,32 @@ describe("main content selection", () => {
     expect(Date.now() - started).toBeLessThan(1500);
   });
 });
+
+describe("noise from modern frameworks", () => {
+  const longPath = `M18.29 5.70 ${"L10.70 6.70 ".repeat(400)}`;
+
+  it("keeps inline graphics out of headings", async () => {
+    const page = await extract(
+      `<main><h2>Flagship models <svg width="16"><path d="${longPath}"/></svg></h2><p>First paragraph text.</p><p>Second paragraph text.</p><p>Third paragraph text.</p></main>`,
+    );
+    expect(page.headings).toEqual(["Flagship models"]);
+  });
+
+  it("strips tags that carry very long attributes", async () => {
+    const props = `{&quot;rows&quot;:[${"[0,&quot;value&quot;],".repeat(400)}]}`;
+    const page = await extract(
+      `<main><p>Prices per 1M tokens.</p><astro-island uid="1pJXAL" props="${props}"></astro-island><p>Second paragraph text.</p><p>Third paragraph text.</p></main>`,
+    );
+    const text = page.paragraphs.join("\n");
+    expect(text).toContain("Prices per 1M tokens.");
+    expect(text).not.toMatch(/props|1pJXAL|rows|value/);
+  });
+
+  it("produces the same hash when only a per-render identifier inside a tag changes", async () => {
+    const render = (uid: string) =>
+      `<main><p>Prices per 1M tokens.</p><astro-island uid="${uid}" props="{&quot;id&quot;:[0,&quot;${uid}&quot;]}"></astro-island><p>Input: $1.25.</p><p>Output: $10.</p></main>`;
+    expect((await extract(render("1pJXAL"))).contentHash).toBe(
+      (await extract(render("Zq83Kd"))).contentHash,
+    );
+  });
+});
