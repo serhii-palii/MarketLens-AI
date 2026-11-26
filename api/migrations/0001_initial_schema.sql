@@ -1,6 +1,5 @@
--- Migration 0001: initial schema.
--- Core tables for monitoring, change detection, AI analysis, and human review.
--- Timestamps are UTC ISO 8601 text with milliseconds, matching JavaScript's toISOString().
+-- FILE: api/migrations/0001_initial_schema.sql
+-- Initial schema: core tables for monitoring, change detection, AI analysis, and human review.
 
 CREATE TABLE competitors (
   id INTEGER PRIMARY KEY,

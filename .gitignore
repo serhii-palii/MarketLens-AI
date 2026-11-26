@@ -1,3 +1,6 @@
+# FILE: .gitignore
+# Files and folders that Git does not track.
+
 # Dependencies
 node_modules/
 

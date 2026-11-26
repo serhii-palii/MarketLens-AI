@@ -1,3 +1,6 @@
+// FILE: api/wrangler.jsonc
+// Worker configuration: entry point, static assets, database bindings, and request logging.
+
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "marketlens-ai",

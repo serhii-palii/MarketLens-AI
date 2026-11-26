@@ -1,1 +1,4 @@
+/* FILE: web/src/styles.css */
+/* Global styles: loads the utility-first CSS framework. */
+
 @import "tailwindcss";

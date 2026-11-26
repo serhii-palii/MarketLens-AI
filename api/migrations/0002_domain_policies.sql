@@ -1,6 +1,5 @@
--- Migration 0002: per-site policy cache.
--- Holds each site's robots.txt so the collector asks for it at most once per day.
--- The text comes from the monitored site and is only ever parsed, never rendered.
+-- FILE: api/migrations/0002_domain_policies.sql
+-- Per-site policy cache: holds each site's robots.txt so the collector asks for it at most once per day.
 
 CREATE TABLE domain_policies (
   origin TEXT PRIMARY KEY CHECK (length(origin) <= 300),
