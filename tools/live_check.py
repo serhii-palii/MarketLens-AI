@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-"""Seeds sample competitors and pages, runs page checks, and prints a results table without private details.
-
-Run: python3 tools/live_check.py [--rounds N] [--no-seed]
-Asks for the app address and the owner access key; neither is printed or stored.
-"""
+# FILE: tools/live_check.py
+# Seeds sample competitors and pages, runs page checks, and prints a results table without private details.
+# Run: python3 tools/live_check.py [--rounds N] [--no-seed]
 import argparse
-import getpass
-import json
-import os
-import subprocess
-import sys
-import tempfile
 import time
 from urllib.parse import urlparse
+
+from ml_api import session
 
 SITES = [
     ("Anthropic (Claude)", [("Claude pricing", "https://claude.com/pricing", "marketing"),
@@ -30,29 +24,6 @@ SITES = [
     ("Zoom", [("Zoom pricing (redirect test)", "https://zoom.us/pricing", "marketing")]),
     ("Baseline", [("Tiny static page", "https://example.com/", "product")]),
 ]
-
-
-class Api:
-    """Calls the app with curl so the system certificate store is used."""
-
-    def __init__(self, base, jar):
-        self.base = base.rstrip("/")
-        self.jar = jar
-
-    def call(self, method, path, body=None):
-        command = ["curl", "-s", "-S", "--max-time", "90", "-b", self.jar, "-c", self.jar, "-X", method,
-                   "-H", "Content-Type: application/json", "-w", "\n%{http_code}", self.base + path]
-        if body is not None:
-            command += ["--data-binary", "@-"]
-        result = subprocess.run(command, input=json.dumps(body) if body is not None else None,
-                                capture_output=True, text=True)
-        if result.returncode != 0:
-            return 0, {"error": "network_error"}
-        text, _, status = result.stdout.rpartition("\n")
-        try:
-            return int(status), (json.loads(text) if text.strip() else {})
-        except ValueError:
-            return int(status or 0), {"error": "unreadable_response"}
 
 
 def seed(api):
@@ -120,14 +91,7 @@ def main():
     parser.add_argument("--no-seed", action="store_true", help="skip adding the sample competitors and pages")
     args = parser.parse_args()
 
-    base = os.environ.get("ML_BASE") or input("App address (for example https://name.workers.dev): ").strip()
-    key = getpass.getpass("Owner access key (hidden): ")
-    with tempfile.TemporaryDirectory() as folder:
-        api = Api(base, os.path.join(folder, "jar"))
-        status, _ = api.call("POST", "/api/auth/login", {"accessKey": key})
-        if status != 200:
-            sys.exit(f"Login failed (HTTP {status}). Nothing else was done.")
-        print("Logged in.")
+    with session() as api:
         if not args.no_seed:
             seed(api)
         run_checks(api, max(1, args.rounds))

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Summarizes an exported Observability log file: CPU and wall time per checked page, with no identifying fields.
-
-Run: python3 tools/summarize_logs.py path/to/export.csv
-"""
+# FILE: tools/summarize_logs.py
+# Summarizes an exported Observability log file: CPU and wall time per checked page, with no identifying fields.
+# Run: python3 tools/summarize_logs.py path/to/export.csv
 import csv
 import re
 import statistics
