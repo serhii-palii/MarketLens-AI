@@ -278,13 +278,13 @@ describe("main content selection", () => {
     const page = await extract(
       `<body><p>Intro text here.</p><p>More intro text.</p><p>Even more text.</p><main><div id="root"></div></main></body>`,
     );
-    expect(page.regionSource).toBe("start");
+    expect(page.regionSource).toBe("body");
     expect(page.paragraphs.join("\n")).toContain("Intro text here.");
   });
 
   it("flags a page without a main element that exceeds the window", async () => {
     const page = await extract(`<body>${menu(9000)}</body>`);
-    expect(page.regionSource).toBe("start");
+    expect(page.regionSource).toBe("body");
     expect(page.regionTruncated).toBe(true);
   });
 
@@ -330,5 +330,76 @@ describe("noise from modern frameworks", () => {
     expect((await extract(render("1pJXAL"))).contentHash).toBe(
       (await extract(render("Zq83Kd"))).contentHash,
     );
+  });
+});
+
+describe("markup inside attributes and unclosed raw-text elements", () => {
+  it("treats tooltips with markup in an attribute as part of the tag", async () => {
+    const page = await extract(
+      `<main><table><tr><td class="gridTable__cell" data-tooltip="<div>Tip text</div><b>more</b>">Feature A</td><td>Yes</td></tr><tr><td>Feature B</td><td>No</td></tr></table></main>`,
+    );
+    const text = page.paragraphs.join("\n");
+    expect(text).toContain("Feature A");
+    expect(text).toContain("Feature B");
+    expect(text).not.toMatch(/<td|Tip text|gridTable|data-tooltip/);
+  });
+
+  it("keeps icon markup stored in an attribute out of the text", async () => {
+    const page = await extract(
+      `<main><p>Intro paragraph text.</p><span data-icon='<svg><path d="M1 1"/></svg>'>Included</span><p>Second paragraph text.</p><p>Third paragraph text.</p></main>`,
+    );
+    const text = page.paragraphs.join("\n");
+    expect(text).toContain("Included");
+    expect(text).not.toMatch(/<path|data-icon/);
+  });
+
+  it("does not mistake a literal less-than sign for a tag", async () => {
+    const page = await extract(
+      `<main><p>Costs < 5 euros and > 3 users.</p><p>Second paragraph text.</p><p>Third paragraph text.</p></main>`,
+    );
+    expect(page.paragraphs.join("\n")).toContain(
+      "Costs < 5 euros and > 3 users.",
+    );
+  });
+
+  it("drops a style block that is still open at the end of the analyzed region", async () => {
+    const css = ".a{color:red}\n".repeat(30_000);
+    const page = await extract(
+      `<html><body><p>One paragraph here.</p><p>Two paragraph here.</p><p>Three paragraph here.</p><style>${css}`,
+    );
+    expect(page.paragraphs.join("\n")).not.toContain("color:red");
+    expect(page.paragraphs).toContain("Two paragraph here.");
+  });
+
+  it("starts at the body when a huge head would fill the analysis window", async () => {
+    const css = ".a{color:red}\n".repeat(40_000);
+    const html = `<html><head><title>Docs</title><style>${css}</style></head><body><p>Real page text one.</p><p>Real page text two.</p><p>Real page text three.</p></body></html>`;
+    expect(html.indexOf("<body")).toBeGreaterThan(250_000);
+    const page = await extract(html);
+    expect(page.regionSource).toBe("body");
+    expect(page.paragraphs).toContain("Real page text two.");
+    expect(page.title).toBe("Docs");
+  });
+
+  it("does not let a self-closing graphic hide the rest of the page", async () => {
+    const page = await extract(
+      `<body><svg width="1" height="1"/><p>First paragraph text.</p><p>Second paragraph text.</p><p>Third paragraph text.</p></body>`,
+    );
+    expect(page.paragraphs).toContain("Second paragraph text.");
+  });
+
+  it("stays fast on hostile quoting", async () => {
+    const inputs = [
+      '<a x="'.repeat(50_000),
+      "<a '".repeat(60_000),
+      '<p "'.repeat(40_000) + "x".repeat(100_000),
+      `<a ${'x="y" '.repeat(30_000)}`,
+      "<a \"<b '<c \"<d '".repeat(15_000),
+    ];
+    for (const input of inputs) {
+      const started = Date.now();
+      await extractPage(input, BASE);
+      expect(Date.now() - started).toBeLessThan(1500);
+    }
   });
 });

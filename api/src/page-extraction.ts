@@ -38,15 +38,22 @@ const ENTITIES: Record<string, string> = {
   "&pound;": "£",
 };
 
-// Tag patterns cannot cross another "<", so each stretch of text is scanned at most once and the cost stays linear.
-// The length limit is generous because real pages carry very long attributes (inline data, serialized component props).
-const TAG = "<[^<>]{0,60000}>";
+// A tag may hold quoted attribute values that contain "<" or ">" (tooltips and icons are often stored as markup inside
+// attributes). The alternatives are mutually exclusive, so matching stays linear even on malformed input.
+const TAG_BODY = `(?:[^<>"']|"[^"]*"|'[^']*')*`;
 const COMMENT = /<!--[\s\S]*?-->/g;
 const SKIPPED_ELEMENT =
   /<(script|style|noscript|svg|template|nav|footer|aside)\b[\s\S]*?<\/\1\s*>/gi;
-const BLOCK_TAG =
-  /<\/?(?:p|li|ul|ol|h[1-6]|td|th|tr|div|section|article|blockquote|figcaption|dt|dd|br)\b[^<>]{0,60000}>/gi;
-const ANY_TAG = new RegExp(TAG, "g");
+const BLOCK_TAG = new RegExp(
+  `<\\/?(?:p|li|ul|ol|h[1-6]|td|th|tr|div|section|article|blockquote|figcaption|dt|dd|br)\\b${TAG_BODY}>`,
+  "gi",
+);
+const ANY_TAG = new RegExp(`<[a-zA-Z/!?]${TAG_BODY}>`, "g");
+// A script or style that is still open at the end of the analyzed region would otherwise leak its contents as text.
+const UNCLOSED_RAW_TEXT = new RegExp(
+  `<(?:script|style)\\b${TAG_BODY}(?<!/)>[\\s\\S]*$`,
+  "i",
+);
 const OPENERS =
   /<!--|<(script|style|noscript|svg|template|nav|footer|aside)\b/gi;
 const CLOSERS =
@@ -61,7 +68,7 @@ export interface ExtractedPage {
   paragraphs: string[];
   contentHash: string;
   // Which part of the document the text and links came from, and whether that part was cut at the size limit.
-  regionSource: "main" | "role_main" | "article" | "start";
+  regionSource: "main" | "role_main" | "article" | "body" | "start";
   regionTruncated: boolean;
 }
 
@@ -177,13 +184,13 @@ interface RegionContent {
   paragraphs: string[];
 }
 
-// Finds where the main content starts, so a large menu or script block ahead of it cannot push it out of the window.
-function candidateRegions(html: string): Region[] {
-  const candidates: Region[] = [];
+// Candidate regions in order of preference. They are produced lazily so later markers are only searched when needed.
+function* candidateRegions(html: string): Generator<Region> {
   const markers: { pattern: RegExp; source: Region["source"] }[] = [
     { pattern: /<main[\s>]/i, source: "main" },
     { pattern: /\brole\s*=\s*["']main["']/i, source: "role_main" },
     { pattern: /<article[\s>]/i, source: "article" },
+    { pattern: /<body[\s>]/i, source: "body" },
   ];
   for (const { pattern, source } of markers) {
     const found = html.search(pattern);
@@ -201,18 +208,13 @@ function candidateRegions(html: string): Region[] {
         truncated = false;
       }
     }
-    candidates.push({
-      html: region.slice(0, MAX_REGION_CHARS),
-      source,
-      truncated,
-    });
+    yield { html: region.slice(0, MAX_REGION_CHARS), source, truncated };
   }
-  candidates.push({
+  yield {
     html: html.slice(0, MAX_REGION_CHARS),
     source: "start",
     truncated: html.length > MAX_REGION_CHARS,
-  });
-  return candidates;
+  };
 }
 
 function analyzeRegion(
@@ -224,7 +226,8 @@ function analyzeRegion(
   // Comments, scripts, styles, and inline graphics are removed first so they cannot leak into headings or text.
   const cleaned = regionHtml
     .replace(COMMENT, " ")
-    .replace(SKIPPED_ELEMENT, " ");
+    .replace(SKIPPED_ELEMENT, " ")
+    .replace(UNCLOSED_RAW_TEXT, " ");
 
   const headings: string[] = [];
   for (const match of cleaned.matchAll(
@@ -294,9 +297,8 @@ export async function extractPage(
   }
 
   // The first region that yields real text wins; the start of the document is the last resort.
-  const candidates = candidateRegions(html);
   let chosen: { region: Region; content: RegionContent } | null = null;
-  for (const region of candidates) {
+  for (const region of candidateRegions(html)) {
     const content = analyzeRegion(region.html, baseUrl);
     if (!content) continue;
     if (
