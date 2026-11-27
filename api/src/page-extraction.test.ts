@@ -403,3 +403,22 @@ describe("markup inside attributes and unclosed raw-text elements", () => {
     }
   });
 });
+
+describe("leftover markup safety net", () => {
+  it("removes tag-like fragments that arrive entity-escaped", async () => {
+    const page = await extract(
+      `<main><p>Included &lt;path clip-rule="evenodd" d="m14.3838 3.3276c.3164"&gt;</p><p>Second paragraph text.</p><p>Third paragraph text.</p></main>`,
+    );
+    expect(page.paragraphs).toContain("Included");
+    expect(page.paragraphs.join("\n")).not.toMatch(/<path|clip-rule/);
+  });
+
+  it("keeps ordinary comparison text", async () => {
+    const page = await extract(
+      `<main><p>Pay 5 < 6 euros for teams > 3 users.</p><p>Second paragraph text.</p><p>Third paragraph text.</p></main>`,
+    );
+    expect(page.paragraphs.join("\n")).toContain(
+      "Pay 5 < 6 euros for teams > 3 users.",
+    );
+  });
+});

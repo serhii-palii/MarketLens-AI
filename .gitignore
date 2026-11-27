@@ -30,6 +30,8 @@ PROJECT_INSTRUCTIONS.md
 
 # Logs
 *.log
+__pycache__/
+*.pyc
 
 # Editor directories and files
 .vscode/

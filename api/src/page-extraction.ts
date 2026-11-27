@@ -50,6 +50,9 @@ const BLOCK_TAG = new RegExp(
 );
 const ANY_TAG = new RegExp(`<[a-zA-Z/!?]${TAG_BODY}>`, "g");
 // A script or style that is still open at the end of the analyzed region would otherwise leak its contents as text.
+// Safety net: tag-like fragments that survive stripping (for example markup that arrived entity-escaped) are removed
+// to the end of their line, so they cannot end up in the stored text.
+const LEFTOVER_TAG = /<\/?[a-zA-Z][\w:-]*(?:\s[^\n<>]*)?(?:>|(?=\n|$))/gm;
 const UNCLOSED_RAW_TEXT = new RegExp(
   `<(?:script|style)\\b${TAG_BODY}(?<!/)>[\\s\\S]*$`,
   "i",
@@ -252,7 +255,7 @@ function analyzeRegion(
 
   const text = decodeEntities(
     cleaned.replace(BLOCK_TAG, "\n").replace(ANY_TAG, " "),
-  );
+  ).replace(LEFTOVER_TAG, " ");
   const paragraphs = text
     .split("\n")
     .map((line) => normalizeText(line).slice(0, MAX_PARAGRAPH_LENGTH))
